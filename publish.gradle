@@ -1,112 +1,142 @@
-/*
- * Copyright 2013 Chris Banes
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-apply plugin: 'maven'
+apply plugin: 'maven-publish'
 apply plugin: 'signing'
+apply plugin: 'pom'
 
-def isReleaseBuild() {
-    return VERSION_NAME.contains("SNAPSHOT") == false
+def isAndroid = plugins.hasPlugin('com.android.library')
+
+ext {
+    pomFile = file("${project.buildDir}/generated-pom.xml")
+    isReleaseVersion = !(project.version =~ /-SNAPSHOT$/)
 }
 
-def getRepositoryUsername() {
-    return hasProperty('SONATYPE_NEXUS_USERNAME') ? SONATYPE_NEXUS_USERNAME : "$System.env.SONATYPE_NEXUS_USERNAME"
+if (isAndroid) {
+    task javadoc(type: Javadoc) {
+        source = android.sourceSets.main.java.srcDirs
+    }
 }
 
-def getRepositoryPassword() {
-    return hasProperty('SONATYPE_NEXUS_PASSWORD') ? SONATYPE_NEXUS_PASSWORD : "$System.env.SONATYPE_NEXUS_PASSWORD"
+task javadocsJar(type: Jar) {
+    classifier = 'javadoc'
+    from javadoc.destinationDir
+}
+task sourcesJar(type: Jar) {
+    classifier = 'sources'
+    if (isAndroid) {
+        from android.sourceSets.main.java.srcDirs
+    } else {
+        from sourceSets.main.allSource
+    }
 }
 
-afterEvaluate { project ->
-    uploadArchives {
-        repositories {
-            mavenDeployer {
-                beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
+artifacts {
+    archives sourcesJar
+    archives javadocsJar
+}
 
-                pom.groupId = GROUP
-                pom.artifactId = POM_ARTIFACT_ID
-                pom.version = VERSION_NAME
+signing {
+    required { signatory != null && project.ext.isReleaseVersion }
+    sign configurations.archives
+}
 
-                repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
-                    authentication(userName: getRepositoryUsername(), password: getRepositoryPassword())
-                }
-                snapshotRepository(url: "https://oss.sonatype.org/content/repositories/snapshots/") {
-                    authentication(userName: getRepositoryUsername(), password: getRepositoryPassword())
-                }
+def siteUrl = 'https://github.com/kritarie/QuickScope'
+def gitUrl = 'https://github.com/kritarie/QuickScope.git'
 
-                pom.project {
-                    name POM_NAME
-                    packaging POM_PACKAGING
-                    description POM_DESCRIPTION
-                    url POM_URL
+pom {
+    name project.name
+    if (isAndroid) {
+        packaging 'aar'
+    }
+    description POM_DESCRIPTION
+    url siteUrl
 
-                    scm {
-                        url POM_SCM_URL
-                        connection POM_SCM_CONNECTION
-                        developerConnection POM_SCM_DEV_CONNECTION
-                    }
+    scm {
+        url siteUrl
+        connection gitUrl
+        developerConnection gitUrl
+    }
 
-                    licenses {
-                        license {
-                            name POM_LICENCE_NAME
-                            url POM_LICENCE_URL
-                            distribution POM_LICENCE_DIST
-                        }
-                    }
+    licenses {
+        license {
+            name POM_LICENCE_NAME
+            url POM_LICENCE_URL
+            distribution POM_LICENCE_DIST
+        }
+    }
 
-                    developers {
-                        developer {
-                            id POM_DEVELOPER_ID
-                            name POM_DEVELOPER_NAME
+    developers {
+        developer {
+            id POM_DEVELOPER_ID
+            name POM_DEVELOPER_NAME
+        }
+    }
+}
+
+publishing {
+    repositories {
+        maven {
+            if (project.ext.isReleaseVersion) {
+                url 'https://oss.sonatype.org/service/local/staging/deploy/maven2/'
+            } else {
+                url 'https://oss.sonatype.org/content/repositories/snapshots/'
+            }
+
+            credentials {
+                username = project.findProperty('sonatype.username')
+                password = project.findProperty('sonatype.password')
+            }
+        }
+    }
+
+    publications {
+        lib(MavenPublication) {
+            if (isAndroid) {
+                artifact "$buildDir/outputs/aar/${project.name}-release.aar"
+            } else {
+                from components.java
+            }
+
+            artifact sourcesJar
+            artifact javadocsJar
+
+            if (signing.required) {
+                // Sign the artifacts.
+                project.tasks.signArchives.signatureFiles.each {
+                    artifact(it) {
+                        def matcher = it.file =~ /-?(?<classifier>sources|javadoc)?\.(?<extension>jar|aar)\.asc$/
+                        if (matcher.find()) {
+                            classifier = matcher.group('classifier')
+                            extension = matcher.group('extension') + '.asc'
                         }
                     }
                 }
             }
         }
     }
+}
 
-    signing {
-        required { isReleaseBuild() && gradle.taskGraph.hasTask("uploadArchives") }
-        sign configurations.archives
+if (signing.required) {
+    project.afterEvaluate {
+        // Sign the pom.xml.
+        publishing.publications.lib(MavenPublication) {
+            pom.withXml {
+                writeTo(project.ext.pomFile)
+                def pomAscFile = signing.sign(project.ext.pomFile).signatureFiles[0]
+                artifact(pomAscFile) {
+                    classifier = null
+                    extension = 'pom.asc'
+                }
+                project.ext.pomFile.delete()
+            }
+        }
+    }
+}
+
+model {
+    tasks.publishLibPublicationToMavenLocal {
+        dependsOn(project.tasks.signArchives)
     }
 
-//    task androidJavadocs(type: Javadoc) {
-//        source = sourceSets.main.java.srcDirs
-//        classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
-//
-//        if (JavaVersion.current().isJava8Compatible()) {
-//            allprojects {
-//                tasks.withType(Javadoc) {
-//                    options.addStringOption('Xdoclint:none', '-quiet')
-//                }
-//            }
-//        }
-//    }
-
-//    task androidJavadocsJar(type: Jar, dependsOn: androidJavadocs) {
-//        classifier = 'javadoc'
-//        from androidJavadocs.destinationDir
-//    }
-
-    task androidSourcesJar(type: Jar) {
-        classifier = 'sources'
-        from sourceSets.main.java
-    }
-
-    artifacts {
-        archives androidSourcesJar
-//        archives androidJavadocsJar
+    tasks.publishLibPublicationToMavenRepository {
+        dependsOn(project.tasks.signArchives)
     }
 }

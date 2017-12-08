@@ -27,7 +27,7 @@ public class QuickScopeTest {
                 .build();
         ScopeTree tree = new ScopeTree.Builder()
                 .root(root)
-                .watcher(watcher)
+                .addWatcher(watcher)
                 .build();
         ScopedComponent component = new TestComponent();
         QuickScope scope = new QuickScope.Builder(component)
@@ -47,7 +47,7 @@ public class QuickScopeTest {
                 .build();
         ScopeTree tree = new ScopeTree.Builder()
                 .root(root)
-                .watcher(watcher)
+                .addWatcher(watcher)
                 .build();
         ScopedComponent component = new TestComponent();
         QuickScope scope = new QuickScope.Builder(component)
